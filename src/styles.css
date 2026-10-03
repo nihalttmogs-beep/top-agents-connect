@@ -27,7 +27,7 @@
   --destructive: oklch(0.75 0.16 25);
   --border: oklch(1 0 0 / 22%);
   --glass: oklch(1 0 0 / 10%);
-  --glass-strong: oklch(1 0 0 / 18%);
+  --glass-strong: oklch(0.28 0.06 255 / 82%);
 }
 
 @layer base {
