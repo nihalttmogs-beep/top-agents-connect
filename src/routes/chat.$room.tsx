@@ -61,7 +61,7 @@ function Chat() {
     setTyping(true);
     setTimeout(() => {
       setTyping(false);
-      const r = cfg.replies[Math.floor(Math.random() * cfg.replies.length)];
+      const r: string = cfg.replies[Math.floor(Math.random() * cfg.replies.length)] ?? "";
       setMsgs((m) => [...(m ?? []), { id: Date.now() + 1, from: "them", text: r, time: Date.now() }]);
     }, 1200 + Math.random() * 1000);
   };
