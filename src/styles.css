@@ -27,11 +27,19 @@
   --destructive: oklch(0.75 0.16 25);
   --border: oklch(1 0 0 / 22%);
   --glass: oklch(1 0 0 / 10%);
-  --glass-strong: oklch(1 0 0 / 18%);
+  --glass-strong: oklch(0.28 0.06 255 / 82%);
 }
 
 @layer base {
   * { border-color: var(--color-border); }
+  html, body, body * {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  input, textarea, [contenteditable="true"] {
+    user-select: text;
+    -webkit-user-select: text;
+  }
   body {
     font-family: var(--font-sans);
     color: var(--color-foreground);
@@ -48,14 +56,12 @@
 @utility glass {
   background: var(--glass);
   backdrop-filter: blur(22px) saturate(160%);
-  -webkit-backdrop-filter: blur(22px) saturate(160%);
   border: 1px solid var(--border);
   box-shadow: 0 8px 32px oklch(0.1 0.05 250 / 35%), inset 0 1px 0 oklch(1 0 0 / 25%);
 }
 @utility glass-strong {
   background: var(--glass-strong);
   backdrop-filter: blur(28px) saturate(170%);
-  -webkit-backdrop-filter: blur(28px) saturate(170%);
   border: 1px solid var(--border);
   box-shadow: 0 8px 32px oklch(0.1 0.05 250 / 40%), inset 0 1px 0 oklch(1 0 0 / 30%);
 }
