@@ -77,7 +77,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   head: () => ({
     meta: [
       { charSet: "utf-8" },
-      { name: "viewport", content: "width=device-width, initial-scale=1" },
+       { name: "viewport", content: "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" },
       { title: "TopAgents" },
       { name: "description", content: "TopAgents agent portal" },
       { property: "og:title", content: "TopAgents" },
@@ -114,6 +114,27 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+
+  useEffect(() => {
+    const preventWheelZoom = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) event.preventDefault();
+    };
+    const preventKeyboardZoom = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && ["+", "=", "-", "0"].includes(event.key)) event.preventDefault();
+    };
+    const preventGestureZoom = (event: Event) => event.preventDefault();
+
+    window.addEventListener("wheel", preventWheelZoom, { passive: false });
+    window.addEventListener("keydown", preventKeyboardZoom);
+    document.addEventListener("gesturestart", preventGestureZoom, { passive: false });
+    document.addEventListener("gesturechange", preventGestureZoom, { passive: false });
+    return () => {
+      window.removeEventListener("wheel", preventWheelZoom);
+      window.removeEventListener("keydown", preventKeyboardZoom);
+      document.removeEventListener("gesturestart", preventGestureZoom);
+      document.removeEventListener("gesturechange", preventGestureZoom);
+    };
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
