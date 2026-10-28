@@ -41,10 +41,21 @@ function Login() {
         <h1 className="font-display text-4xl font-bold tracking-tight">TopAgents</h1>
         <p className="mt-1 text-sm text-muted-foreground">Sign in to continue</p>
         <div className="mt-8 space-y-3">
-          <input value={u} onChange={(e) => setU(e.target.value)} placeholder="Username" autoComplete="username"
-            className="glass w-full rounded-2xl px-4 py-3 outline-none placeholder:text-muted-foreground focus:border-primary" />
-          <input value={p} onChange={(e) => setP(e.target.value)} type="password" placeholder="Password" autoComplete="current-password"
-            className="glass w-full rounded-2xl px-4 py-3 outline-none placeholder:text-muted-foreground focus:border-primary" />
+          <input
+            value={u}
+            onChange={(e) => setU(e.target.value)}
+            placeholder="Username"
+            autoComplete="username"
+            className="glass w-full rounded-2xl px-4 py-3 outline-none placeholder:text-muted-foreground focus:border-primary"
+          />
+          <input
+            value={p}
+            onChange={(e) => setP(e.target.value)}
+            type="password"
+            placeholder="Password"
+            autoComplete="current-password"
+            className="glass w-full rounded-2xl px-4 py-3 outline-none placeholder:text-muted-foreground focus:border-primary"
+          />
         </div>
         {err && <p className="mt-3 text-sm text-destructive">{err}</p>}
         <button className="mt-6 w-full rounded-2xl bg-primary py-3 font-display font-semibold text-primary-foreground transition hover:opacity-90">
