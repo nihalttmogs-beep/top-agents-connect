@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useAuth } from "@/lib/auth";
 import type { ChatMessageRow, ChatRoom } from "@/lib/database.types";
@@ -8,14 +8,8 @@ import { getSupabaseClient } from "@/lib/supabase";
 type Msg = { id: string; from: "me" | "them"; text: string; time: number };
 
 const ROOMS = {
-  client: {
-    name: "Hal",
-    greeting: "Hi! I'll let you know as soon as I have a task for you.",
-  },
-  support: {
-    name: "Support Team",
-    greeting: "Welcome to TopAgents support. How can we help you today?",
-  },
+  client: { name: "Hal" },
+  support: { name: "Support Team" },
 } as const;
 
 export const Route = createFileRoute("/chat/$room")({
@@ -57,12 +51,10 @@ function Chat() {
   const userId = user?.id ?? null;
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [text, setText] = useState("");
-  const [typing, setTyping] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(true);
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
-  const replyTimer = useRef<number | null>(null);
 
   useEffect(() => {
     if (authLoading) return;
@@ -118,76 +110,38 @@ function Chat() {
     return () => {
       active = false;
       void client.removeChannel(channel);
-      if (replyTimer.current !== null) {
-        window.clearTimeout(replyTimer.current);
-        replyTimer.current = null;
-      }
     };
   }, [authLoading, navigate, roomKey, userId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [msgs, typing]);
-
-  const displayedMessages = useMemo(() => {
-    if (msgs.length > 0 && msgs[0]?.from !== "me") return msgs;
-    const greeting: Msg = {
-      id: "welcome",
-      from: "them",
-      text: cfg.greeting,
-      time: msgs[0]?.time ?? Date.now(),
-    };
-    return [greeting, ...msgs];
-  }, [cfg.greeting, msgs]);
+  }, [msgs]);
 
   const send = async () => {
     const body = text.trim();
-    if (!body || !userId || sending || typing || body.length > 4000) return;
+    if (!body || !userId || sending || body.length > 4000) return;
 
     setSending(true);
     setChatError("");
-    const client = getSupabaseClient();
-    const { data, error } = await client
-      .from("chat_messages")
-      .insert({ user_id: userId, room: roomKey, sender: "me", body })
-      .select("id, user_id, room, sender, body, created_at")
-      .single();
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from("chat_messages")
+        .insert({ user_id: userId, room: roomKey, sender: "me", body })
+        .select("id, user_id, room, sender, body, created_at")
+        .single();
 
-    setSending(false);
-    if (error) {
+      if (error) {
+        setChatError("Your message could not be saved. Please try again.");
+        return;
+      }
+
+      setText("");
+      setMsgs((current) => mergeMessages(current, [toMessage(data)]));
+    } catch {
       setChatError("Your message could not be saved. Please try again.");
-      return;
+    } finally {
+      setSending(false);
     }
-
-    setText("");
-    setMsgs((current) => mergeMessages(current, [toMessage(data)]));
-    setTyping(true);
-
-    replyTimer.current = window.setTimeout(
-      () => {
-        void client.functions
-          .invoke("chat-demo-reply", { body: { room: roomKey } })
-          .then(({ data, error }) => {
-            setTyping(false);
-            if (error) {
-              setChatError("Your message is saved, but the demo reply could not be saved.");
-              return;
-            }
-
-            const reply = (data as { message?: ChatMessageRow } | null)?.message;
-            if (!reply) {
-              setChatError("Your message is saved, but the demo reply was empty.");
-              return;
-            }
-            setMsgs((current) => mergeMessages(current, [toMessage(reply)]));
-          })
-          .catch(() => {
-            setTyping(false);
-            setChatError("Your message is saved, but the demo reply could not be saved.");
-          });
-      },
-      1200 + Math.random() * 1000,
-    );
   };
 
   if (authLoading || !userId) return null;
@@ -210,17 +164,19 @@ function Chat() {
         </div>
         <div>
           <p className="font-display font-semibold">{cfg.name}</p>
-          <p className="text-xs text-muted-foreground">
-            {typing ? "replying…" : "Cloud-synced demo chat"}
-          </p>
+          <p className="text-xs text-muted-foreground">Cloud-synced messages</p>
         </div>
       </header>
 
       <div className="flex-1 space-y-2 overflow-y-auto px-1 py-4" aria-live="polite">
         {loadingMessages ? (
           <p className="py-3 text-center text-sm text-muted-foreground">Loading saved messages…</p>
+        ) : msgs.length === 0 ? (
+          <p className="py-3 text-center text-sm text-muted-foreground">
+            No messages yet. Send a message to start the conversation.
+          </p>
         ) : (
-          displayedMessages.map((message) => (
+          msgs.map((message) => (
             <div
               key={message.id}
               className={`flex ${message.from === "me" ? "justify-end" : "justify-start"}`}
@@ -242,9 +198,6 @@ function Chat() {
             {chatError}
           </p>
         )}
-        {typing && (
-          <div className="glass w-16 animate-pulse rounded-2xl px-4 py-2 text-center">•••</div>
-        )}
         <div ref={endRef} />
       </div>
 
@@ -261,12 +214,12 @@ function Chat() {
           placeholder={`Message ${cfg.name}…`}
           aria-label={`Message ${cfg.name}`}
           maxLength={4000}
-          disabled={loadingMessages || sending || typing}
+          disabled={loadingMessages || sending}
           className="flex-1 bg-transparent px-3 outline-none placeholder:text-muted-foreground disabled:opacity-60"
         />
         <button
           type="submit"
-          disabled={!text.trim() || loadingMessages || sending || typing}
+          disabled={!text.trim() || loadingMessages || sending}
           className="rounded-2xl bg-primary px-5 py-2 font-semibold text-primary-foreground disabled:opacity-40"
         >
           {sending ? "Saving…" : "Send"}
