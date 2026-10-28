@@ -1,99 +1,207 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
-import { isLoggedIn } from "@/lib/auth";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-type Msg = { id: number; from: "me" | "them"; text: string; time: number };
+import { useAuth } from "@/lib/auth";
+import type { ChatMessageRow, ChatRoom } from "@/lib/database.types";
+import { getSupabaseClient } from "@/lib/supabase";
+
+type Msg = { id: string; from: "me" | "them"; text: string; time: number };
 
 const ROOMS = {
   client: {
     name: "Hal",
     greeting: "Hi! I'll let you know as soon as I have a task for you.",
-    replies: [
-      "Got it, thanks!",
-      "I'll get back to you shortly.",
-      "Noted. No tasks yet, stay tuned.",
-      "Sounds good 👍",
-    ],
   },
   support: {
     name: "Support Team",
     greeting: "Welcome to TopAgents support. How can we help you today?",
-    replies: [
-      "Thanks for reaching out! A team member will review this.",
-      "We've noted your request.",
-      "Is there anything else we can help with?",
-    ],
   },
 } as const;
 
 export const Route = createFileRoute("/chat/$room")({
   head: ({ params }) => {
-    const n = params.room === "support" ? "Support Team" : "Hal";
+    const name = params.room === "support" ? "Support Team" : "Hal";
     return {
       meta: [
-        { title: `Chat with ${n} — TopAgents` },
-        { name: "description", content: `Message ${n} on TopAgents.` },
-        { property: "og:title", content: `Chat with ${n} — TopAgents` },
-        { property: "og:description", content: `Message ${n} on TopAgents.` },
+        { title: `Chat with ${name} — TopAgents` },
+        { name: "description", content: `Message ${name} on TopAgents.` },
+        { property: "og:title", content: `Chat with ${name} — TopAgents` },
+        { property: "og:description", content: `Message ${name} on TopAgents.` },
       ],
     };
   },
   component: Chat,
 });
 
+function toMessage(row: ChatMessageRow): Msg {
+  return {
+    id: row.id,
+    from: row.sender,
+    text: row.body,
+    time: Date.parse(row.created_at),
+  };
+}
+
+function mergeMessages(current: Msg[], incoming: Msg[]): Msg[] {
+  const messages = new Map(current.map((message) => [message.id, message]));
+  for (const message of incoming) messages.set(message.id, message);
+  return [...messages.values()].sort((left, right) => left.time - right.time);
+}
+
 function Chat() {
   const { room } = Route.useParams();
-  const cfg = ROOMS[room === "support" ? "support" : "client"];
-  const key = `topagents_chat_${room}`;
+  const roomKey: ChatRoom = room === "support" ? "support" : "client";
+  const cfg = ROOMS[roomKey];
   const navigate = useNavigate();
-  const [msgs, setMsgs] = useState<Msg[] | null>(null);
+  const { loading: authLoading, user } = useAuth();
+  const userId = user?.id ?? null;
+  const [msgs, setMsgs] = useState<Msg[]>([]);
   const [text, setText] = useState("");
   const [typing, setTyping] = useState(false);
+  const [loadingMessages, setLoadingMessages] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [chatError, setChatError] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
+  const replyTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!isLoggedIn()) return void navigate({ to: "/", replace: true });
-    const saved = localStorage.getItem(key);
-    setMsgs(
-      saved ? JSON.parse(saved) : [{ id: 1, from: "them", text: cfg.greeting, time: Date.now() }],
-    );
-  }, [cfg.greeting, key, navigate]);
+    if (authLoading) return;
+    if (!userId) {
+      setLoadingMessages(false);
+      navigate({ to: "/", replace: true });
+      return;
+    }
+
+    let active = true;
+    const client = getSupabaseClient();
+    setMsgs([]);
+    setChatError("");
+    setLoadingMessages(true);
+
+    const channel = client
+      .channel(`chat:${userId}:${roomKey}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "chat_messages",
+          filter: `room=eq.${roomKey}`,
+        },
+        (payload) => {
+          const row = payload.new as ChatMessageRow;
+          if (row.user_id !== userId) return;
+          setMsgs((current) => mergeMessages(current, [toMessage(row)]));
+        },
+      )
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          setChatError("Live updates are temporarily unavailable. Refresh to reconnect.");
+        }
+      });
+
+    void client
+      .from("chat_messages")
+      .select("id, user_id, room, sender, body, created_at")
+      .eq("room", roomKey)
+      .order("created_at", { ascending: true })
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          setChatError("Could not load saved messages. Check your connection and retry.");
+        } else {
+          setMsgs((current) => mergeMessages(current, (data ?? []).map(toMessage)));
+        }
+        setLoadingMessages(false);
+      });
+
+    return () => {
+      active = false;
+      void client.removeChannel(channel);
+      if (replyTimer.current !== null) {
+        window.clearTimeout(replyTimer.current);
+        replyTimer.current = null;
+      }
+    };
+  }, [authLoading, navigate, roomKey, userId]);
 
   useEffect(() => {
-    if (msgs) localStorage.setItem(key, JSON.stringify(msgs));
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [key, msgs, typing]);
+  }, [msgs, typing]);
 
-  const send = () => {
-    const t = text.trim();
-    if (!t) return;
-    setMsgs((m) => [...(m ?? []), { id: Date.now(), from: "me", text: t, time: Date.now() }]);
+  const displayedMessages = useMemo(() => {
+    if (msgs.length > 0 && msgs[0]?.from !== "me") return msgs;
+    const greeting: Msg = {
+      id: "welcome",
+      from: "them",
+      text: cfg.greeting,
+      time: msgs[0]?.time ?? Date.now(),
+    };
+    return [greeting, ...msgs];
+  }, [cfg.greeting, msgs]);
+
+  const send = async () => {
+    const body = text.trim();
+    if (!body || !userId || sending || typing || body.length > 4000) return;
+
+    setSending(true);
+    setChatError("");
+    const client = getSupabaseClient();
+    const { data, error } = await client
+      .from("chat_messages")
+      .insert({ user_id: userId, room: roomKey, sender: "me", body })
+      .select("id, user_id, room, sender, body, created_at")
+      .single();
+
+    setSending(false);
+    if (error) {
+      setChatError("Your message could not be saved. Please try again.");
+      return;
+    }
+
     setText("");
+    setMsgs((current) => mergeMessages(current, [toMessage(data)]));
     setTyping(true);
-    setTimeout(
+
+    replyTimer.current = window.setTimeout(
       () => {
-        setTyping(false);
-        const r: string = cfg.replies[Math.floor(Math.random() * cfg.replies.length)] ?? "";
-        setMsgs((m) => [
-          ...(m ?? []),
-          { id: Date.now() + 1, from: "them", text: r, time: Date.now() },
-        ]);
+        void client.functions
+          .invoke("chat-demo-reply", { body: { room: roomKey } })
+          .then(({ data, error }) => {
+            setTyping(false);
+            if (error) {
+              setChatError("Your message is saved, but the demo reply could not be saved.");
+              return;
+            }
+
+            const reply = (data as { message?: ChatMessageRow } | null)?.message;
+            if (!reply) {
+              setChatError("Your message is saved, but the demo reply was empty.");
+              return;
+            }
+            setMsgs((current) => mergeMessages(current, [toMessage(reply)]));
+          })
+          .catch(() => {
+            setTyping(false);
+            setChatError("Your message is saved, but the demo reply could not be saved.");
+          });
       },
       1200 + Math.random() * 1000,
     );
   };
 
-  if (!msgs) return null;
-  const fmt = (n: number) =>
-    new Date(n).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (authLoading || !userId) return null;
+
+  const formatTime = (timestamp: number) =>
+    new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col p-3">
       <header className="glass-strong flex items-center gap-3 rounded-3xl p-3">
         <Link
           to="/home"
-          aria-label="Back"
-          className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-glass text-xl"
+          aria-label="Back to dashboard"
+          className="flex h-10 w-10 items-center justify-center rounded-full text-xl hover:bg-glass"
         >
           ←
         </Link>
@@ -102,45 +210,66 @@ function Chat() {
         </div>
         <div>
           <p className="font-display font-semibold">{cfg.name}</p>
-          <p className="text-xs text-muted-foreground">{typing ? "typing…" : "online"}</p>
+          <p className="text-xs text-muted-foreground">
+            {typing ? "replying…" : "Cloud-synced demo chat"}
+          </p>
         </div>
       </header>
 
-      <div className="flex-1 space-y-2 overflow-y-auto px-1 py-4">
-        {msgs.map((m) => (
-          <div key={m.id} className={`flex ${m.from === "me" ? "justify-end" : "justify-start"}`}>
+      <div className="flex-1 space-y-2 overflow-y-auto px-1 py-4" aria-live="polite">
+        {loadingMessages ? (
+          <p className="py-3 text-center text-sm text-muted-foreground">Loading saved messages…</p>
+        ) : (
+          displayedMessages.map((message) => (
             <div
-              className={`max-w-[78%] rounded-2xl px-4 py-2 ${m.from === "me" ? "bg-primary text-primary-foreground rounded-br-md" : "glass rounded-bl-md"}`}
+              key={message.id}
+              className={`flex ${message.from === "me" ? "justify-end" : "justify-start"}`}
             >
-              <p className="whitespace-pre-wrap break-words">{m.text}</p>
-              <p className="mt-1 text-right text-[10px] opacity-60">{fmt(m.time)}</p>
+              <div
+                className={`max-w-[78%] rounded-2xl px-4 py-2 ${message.from === "me" ? "rounded-br-md bg-primary text-primary-foreground" : "glass rounded-bl-md"}`}
+              >
+                <p className="whitespace-pre-wrap break-words">{message.text}</p>
+                <p className="mt-1 text-right text-[10px] opacity-60">{formatTime(message.time)}</p>
+              </div>
             </div>
-          </div>
-        ))}
+          ))
+        )}
+        {chatError && (
+          <p
+            className="rounded-xl bg-destructive/20 px-4 py-3 text-sm text-destructive"
+            role="alert"
+          >
+            {chatError}
+          </p>
+        )}
         {typing && (
-          <div className="glass w-16 rounded-2xl px-4 py-2 text-center animate-pulse">•••</div>
+          <div className="glass w-16 animate-pulse rounded-2xl px-4 py-2 text-center">•••</div>
         )}
         <div ref={endRef} />
       </div>
 
       <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          send();
+        onSubmit={async (event) => {
+          event.preventDefault();
+          await send();
         }}
         className="glass-strong flex gap-2 rounded-3xl p-2"
       >
         <input
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(event) => setText(event.target.value)}
           placeholder={`Message ${cfg.name}…`}
-          className="flex-1 bg-transparent px-3 outline-none placeholder:text-muted-foreground"
+          aria-label={`Message ${cfg.name}`}
+          maxLength={4000}
+          disabled={loadingMessages || sending || typing}
+          className="flex-1 bg-transparent px-3 outline-none placeholder:text-muted-foreground disabled:opacity-60"
         />
         <button
-          disabled={!text.trim()}
+          type="submit"
+          disabled={!text.trim() || loadingMessages || sending || typing}
           className="rounded-2xl bg-primary px-5 py-2 font-semibold text-primary-foreground disabled:opacity-40"
         >
-          Send
+          {sending ? "Saving…" : "Send"}
         </button>
       </form>
     </main>
