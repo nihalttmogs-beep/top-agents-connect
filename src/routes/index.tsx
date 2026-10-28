@@ -19,11 +19,9 @@ export const Route = createFileRoute("/")({
 function Login() {
   const navigate = useNavigate();
   const { configured, error: sessionError, loading, session } = useAuth();
-  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -47,36 +45,26 @@ function Login() {
         onSubmit={async (event) => {
           event.preventDefault();
           setError("");
-          setNotice("");
           setSubmitting(true);
 
           try {
             const client = getSupabaseClient();
-            const normalizedEmail = email.trim();
+            const { data, error: loginError } = await client.functions.invoke("account-login", {
+              body: { username: username.trim().toLowerCase(), password },
+            });
+            if (loginError) throw new Error("Invalid username or password.");
 
-            if (mode === "sign-in") {
-              const { error: signInError } = await client.auth.signInWithPassword({
-                email: normalizedEmail,
-                password,
-              });
-              if (signInError) throw signInError;
-              navigate({ to: "/home", replace: true });
-            } else {
-              const { data, error: signUpError } = await client.auth.signUp({
-                email: normalizedEmail,
-                password,
-                options: { emailRedirectTo: window.location.origin },
-              });
-              if (signUpError) throw signUpError;
+            const loginData = data as {
+              session?: { access_token: string; refresh_token: string };
+            } | null;
+            if (!loginData?.session) throw new Error("Sign-in is temporarily unavailable.");
 
-              if (data.session) navigate({ to: "/home", replace: true });
-              else setNotice("Check your email to confirm your account, then sign in.");
-            }
+            const { error: sessionSetError } = await client.auth.setSession(loginData.session);
+            if (sessionSetError) throw new Error("Sign-in is temporarily unavailable.");
+            navigate({ to: "/home", replace: true });
           } catch (submitError) {
             setError(
-              submitError instanceof Error
-                ? submitError.message
-                : "Unable to authenticate right now.",
+              submitError instanceof Error ? submitError.message : "Unable to sign in right now.",
             );
           } finally {
             setSubmitting(false);
@@ -85,20 +73,20 @@ function Login() {
         className="glass w-full max-w-sm rounded-[2rem] p-8"
       >
         <h1 className="font-display text-4xl font-bold tracking-tight">TopAgents</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {mode === "sign-in" ? "Sign in to continue" : "Create your agent account"}
-        </p>
+        <p className="mt-1 text-sm text-muted-foreground">Sign in to continue</p>
 
         <div className="mt-8 space-y-4">
           <label className="block space-y-2 text-sm font-medium">
-            <span>Email</span>
+            <span>Username</span>
             <input
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              type="email"
-              name="email"
-              placeholder="you@example.com"
-              autoComplete="email"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              type="text"
+              name="username"
+              placeholder="Your username"
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
               required
               className="glass w-full rounded-2xl px-4 py-3 outline-none placeholder:text-muted-foreground focus:border-primary"
             />
@@ -110,9 +98,8 @@ function Login() {
               onChange={(event) => setPassword(event.target.value)}
               type="password"
               name="password"
-              placeholder={mode === "sign-up" ? "At least 8 characters" : "Your password"}
-              autoComplete={mode === "sign-up" ? "new-password" : "current-password"}
-              minLength={mode === "sign-up" ? 8 : undefined}
+              placeholder="Your password"
+              autoComplete="current-password"
               required
               className="glass w-full rounded-2xl px-4 py-3 outline-none placeholder:text-muted-foreground focus:border-primary"
             />
@@ -135,30 +122,17 @@ function Login() {
             {error}
           </p>
         )}
-        {notice && (
-          <p className="mt-4 text-sm text-primary" role="status">
-            {notice}
-          </p>
-        )}
 
         <button
           type="submit"
           disabled={!configured || submitting}
           className="mt-6 w-full rounded-2xl bg-primary py-3 font-display font-semibold text-primary-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting ? "Please wait…" : mode === "sign-in" ? "Sign in" : "Create account"}
+          {submitting ? "Please wait…" : "Sign in"}
         </button>
-        <button
-          type="button"
-          onClick={() => {
-            setMode((current) => (current === "sign-in" ? "sign-up" : "sign-in"));
-            setError("");
-            setNotice("");
-          }}
-          className="mt-4 w-full rounded-2xl px-4 py-2 text-sm text-muted-foreground transition hover:text-foreground"
-        >
-          {mode === "sign-in" ? "New here? Create an account" : "Already registered? Sign in"}
-        </button>
+        <p className="mt-4 text-center text-xs text-muted-foreground">
+          Use the username and password for your Worker, Support, or Client account.
+        </p>
       </form>
     </main>
   );
